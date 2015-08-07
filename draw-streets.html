@@ -1,0 +1,230 @@
+<html>
+<head>
+  <script src="https://code.jquery.com/jquery-1.11.3.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/processing.js/1.4.8/processing.js"></script>
+  <style>
+    body {
+      font-family: "Helvetica Neue" sans-serif;
+    }
+    h1, h2, h3 {
+      font-weight: normal;
+    }
+    h2 {
+      margin-top: 0;
+      
+      font-size: 25px;
+    }
+    p {
+      font-size: 14px;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      width: 500px;
+      height: 500px;
+      z-index: 0;
+      margin-right: 20px;
+    }
+    .wrapper {
+      display: inline-block; 
+      vertical-align: top;
+      position: relative;
+    }
+    .wrapper p {
+      width: 550px;
+    }
+    #textoutput {
+      vertical-align: top;
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10000;
+      font-size: 12px;
+      min-width: 400px;
+    }
+    #draw {
+      border: 0;
+      border-radius: 3px;
+      padding: 10px 15px;
+      background: #abefcd;
+      font-size: 20px;
+    }
+    #draw:hover {
+      background: #55DF9A;
+    }
+    .centering {
+      width: 1100px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    code {
+      display: inline-block;
+      background: #eee;
+      margin: 3px;
+      padding: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="centering">
+    <h1>San Francisco Street Map</h1>
+    <div class="wrapper">
+      <canvas id="canvas1"></canvas>
+      <div id="textoutput"></div>
+    </div>
+    <div class="wrapper">
+      <h2>Draw Nodes or Edges</h2>
+      
+      <p>Click on the map to see the <code>(x, y)</code> coordinates of the nearest intersection.</p>
+      
+      <p>Paste below a python list of nodes <code>(x, y)</code> and edges <code>((x, y), (x, y))</code> to draw those nodes and edges on the map. Some examples:</p>
+      <p><code>[(1702, 4276), (1903, 4434)]</code></p>
+      <p><code>[(1702, 4276), ((1702, 4276), (1771, 4278)), ((1771, 4278), (1840, 4280)), ((1840, 4280), (1908, 4283)), ((1908, 4283), (1903, 4434)), (1903, 4434)]</code></p>
+
+      <textarea id="inputarea" name="input" rows=15 cols=80></textarea><br>
+      <input type="submit" name="Draw" value="Draw" id="draw" />
+    </div>
+  </div>
+  <script type="text/javascript">
+    function sketchProc(processing) {
+      // Override draw function, by default it will be called 60 times per second
+      var RES = 10000;
+      var edges;
+      var nodes;
+      var dirty = false;
+      
+      function drawEdges() {
+        processing.noFill();
+        processing.stroke(0);
+        processing.strokeWeight(1);
+        edges.forEach(function(edge) {
+          processing.line(edge[0][0]/RES*processing.width,
+                          processing.height - edge[0][1]/RES*processing.height,
+                          edge[1][0]/RES*processing.width,
+                          processing.height - edge[1][1]/RES*processing.height);
+        });
+      }
+      function drawNodes() {
+        processing.noStroke();
+        processing.fill(0);
+        nodes.forEach(function(node) {
+          processing.ellipse(node[0]/RES*processing.width,
+                             processing.height - node[1]/RES*processing.height,
+                             2, 2);
+        });
+      }
+      
+      var highlightNode;
+      processing.draw = function() {
+        if (dirty) {
+          processing.background(255);
+          drawEdges();
+          drawNodes();
+          if (highlightNode) {
+            processing.fill(255, 0, 0);
+            processing.noStroke();
+            processing.ellipse(highlightNode[0]/RES*processing.width,
+                               processing.height - highlightNode[1]/RES*processing.height,
+                               10, 10);
+            processing.noFill();
+            processing.stroke(255, 0, 0);
+            processing.strokeWeight(6);
+            processing.ellipse(highlightNode[0]/RES*processing.width,
+                               processing.height - highlightNode[1]/RES*processing.height,
+                               27, 27);
+          }
+          dirty = false;
+        }
+      };
+
+      function n2k(node) {
+        return node[0]+'x'+node[1];
+      }
+      processing.setup = function() {
+        processing.size(1000, 1000);
+        processing.background(0);
+        processing.frameRate(30);
+        $.getJSON('edges.json', function(e) {
+          edges = e;
+          nodes = {};
+          edges.forEach(function(edge) {
+            if (n2k(edge[0]) in nodes)
+            nodes[n2k(edge[0])] = true;
+            nodes[n2k(edge[1])] = true;
+          });
+          nodes = Object.keys(nodes).map(function(k) { return k.split("x").map(Number); });
+          dirty = true;
+        });
+      };
+      processing.mousePressed = function() {
+        var localCoords = [processing.mouseX*2 * RES/processing.width, (processing.height - processing.mouseY*2) * RES/processing.height];
+        var nearestNode, nearestDistance = Number.MAX_VALUE;
+        function distance(n1, n2) {
+          return Math.sqrt((n1[0]-n2[0])*(n1[0]-n2[0]) + (n1[1]-n2[1])*(n1[1]-n2[1]));
+        }
+        nodes.forEach(function(node) {
+          var d = distance(localCoords, node);
+          if (d < nearestDistance) {
+            nearestNode = node;
+            nearestDistance = d;
+          }
+        });
+        $('#textoutput').text("Clicked near node ("+nearestNode[0]+","+nearestNode[1]+")");
+        highlightNode = nearestNode;
+        dirty = true; 
+      }
+      
+      function parseInput(dataString) {
+        var dataJSONish = dataString.replace(/\(/g, "[").replace(/\)/g, "]");
+        var data;
+        try {
+          data = JSON.parse(dataJSONish);
+        } catch (e) {
+          alert("Sorry...I wasn't able to render that string!");
+          console.log(e);
+          return;
+        }
+        if (! data instanceof Array) {
+          alert("Sorry...I wasn't able to render that string!");
+          console.log("Input wasn't an array...");
+          return;
+        }
+        console.log("parsed input as", data);
+        dirty = true;
+        processing.draw();
+        data.forEach(function(entry) {
+          if (entry instanceof Array && entry.length == 2) {
+            // it's a node or edge...
+            if (typeof(entry[0]) == "number") {
+              // it's a node!
+              var node = entry;
+              processing.fill(255, 0, 0);
+              processing.noStroke();
+              processing.ellipse(node[0]/RES*processing.width,
+                                 processing.height - node[1]/RES*processing.height,
+                                 10, 10);
+            } else if (entry[0] instanceof Array && entry[0].length == 2 && entry[1].length == 2) {
+              // it's an edge!
+              var edge = entry;
+              processing.noFill();
+              processing.stroke(255, 0, 0);
+              processing.strokeWeight(3);
+              processing.line(edge[0][0]/RES*processing.width,
+                              processing.height - edge[0][1]/RES*processing.height,
+                              edge[1][0]/RES*processing.width,
+                              processing.height - edge[1][1]/RES*processing.height);
+            }
+          }
+        })
+      }
+      
+      $('#draw').on('click', function() {
+        parseInput($('#inputarea').val());
+      })
+    }
+  
+    var canvas = document.getElementById("canvas1");
+    // attaching the sketchProc function to the canvas
+    var processingInstance = new Processing(canvas, sketchProc);
+  </script>
+</body>
+</html>
