@@ -2,6 +2,13 @@
 <head>
   <script src="https://code.jquery.com/jquery-1.11.3.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/processing.js/1.4.8/processing.js"></script>
+  <script src="codemirror.js"></script>
+  <link rel="stylesheet" href="codemirror.css">
+  <script src="mode/python.js"></script>
+  <script src="min-heap.js"></script>
+  <script src="http://www.skulpt.org/static/skulpt.min.js" type="text/javascript"></script> 
+  <script src="http://www.skulpt.org/static/skulpt-stdlib.js" type="text/javascript"></script>
+  <script src="run-python.js"></script>
   <style>
     body {
       font-family: "Helvetica Neue" sans-serif;
@@ -14,7 +21,7 @@
       
       font-size: 25px;
     }
-    p {
+    p, label {
       font-size: 14px;
     }
     canvas {
@@ -62,6 +69,18 @@
       margin: 3px;
       padding: 2px;
     }
+    .CodeMirror {
+      border: 1px solid #eee;
+      height: 225px;
+      width: 550px;
+    }
+    #pythonoutput {
+      display: none;
+      height: 100px;
+      border: 1px solid #eee;
+      overflow-y: scroll;
+      width: 550px;
+    }
   </style>
 </head>
 <body>
@@ -72,91 +91,184 @@
       <div id="textoutput"></div>
     </div>
     <div class="wrapper">
-      <h2>Draw Nodes or Edges</h2>
+      <h2>Find a Path</h2>
       
-      <p>Click on the map to see the <code>(x, y)</code> coordinates of the nearest intersection.</p>
-      
-      <p>Paste below a python list of nodes <code>(x, y)</code> and edges <code>((x, y), (x, y))</code> to draw those nodes and edges on the map. Some examples:</p>
-      <p><code>[(1702, 4276), (1903, 4434)]</code></p>
-      <p><code>[(1702, 4276), ((1702, 4276), (1771, 4278)), ((1771, 4278), (1840, 4280)), ((1840, 4280), (1908, 4283)), ((1908, 4283), (1903, 4434)), (1903, 4434)]</code></p>
+      <p>Click on the map to see the <code>(x, y)</code> coordinates of the nearest intersection; click a second time to find a path to the second intersection using:</p>
+      <form>
+        <label>
+          <input type="radio" name="searchType" value="bfs" checked="checked" />
+          <span>Breadth-first search</span>
+        </label><br>
+        <label>
+          <input type="radio" name="searchType" value="dfs"/>
+          <span>Depth-first search</span>
+        </label><br>
+        <label>
+          <input type="radio" name="searchType" value="heuristic"/>
+          <span>Greedy best-first search with the following heuristic:</span>
+        </label><br>
+        <textarea id="heuristic">
+# Define a "heuristic" function to return a numerical value
+# representing how "good" the given node is likely to be.
 
-      <textarea id="inputarea" name="input" rows=15 cols=80></textarea><br>
-      <input type="submit" name="Draw" value="Draw" id="draw" />
-    </div>
+# The node with the *lowest* value will be selected next.
+
+# nodes are tuples of (x, y) coordinates; pathSoFar is an
+# array of nodes leading up to (and not including) nextNode
+
+def heuristic(nextNode, fromNode, toNode, pathSoFar):
+  # Here's the breadth-first search heuristic:
+  #   "best" path is the path with fewest nodes:
+  return len(pathSoFar) 
+
+
+</textarea>
+      </form>
+
+<pre id="pythonoutput"></pre>
   </div>
   <script type="text/javascript">
     function sketchProc(processing) {
-      // Override draw function, by default it will be called 60 times per second
       var RES = 10000;
-      var edges;
-      var nodes;
-      var dirty = false;
+      var edges = [];
+      var nodes = [];
+      var adjacencies = {};
+      var edgeSpeeds = {};
+      var dirty = 0;
       
-      function drawEdges() {
-        processing.noFill();
-        processing.stroke(0);
-        processing.strokeWeight(1);
-        edges.forEach(function(edge) {
-          processing.line(edge[0][0]/RES*processing.width,
-                          processing.height - edge[0][1]/RES*processing.height,
-                          edge[1][0]/RES*processing.width,
-                          processing.height - edge[1][1]/RES*processing.height);
+      function drawEdges(gfx) {
+        gfx.noFill();
+        gfx.stroke(0);
+        gfx.strokeWeight(1);
+        edges.filter(function(e) { return e[2] < 60; }).forEach(function(edge) {
+          gfx.line(edge[0][0]/RES*gfx.width,
+                   gfx.height - edge[0][1]/RES*gfx.height,
+                   edge[1][0]/RES*processing.width,
+                   gfx.height - edge[1][1]/RES*gfx.height);
         });
+        gfx.stroke(0, 0, 255);
+        gfx.strokeWeight(2);
+        edges.filter(function(e) { return e[2] >= 60; }).forEach(function(edge) {
+          gfx.line(edge[0][0]/RES*gfx.width,
+                   gfx.height - edge[0][1]/RES*gfx.height,
+                   edge[1][0]/RES*processing.width,
+                   gfx.height - edge[1][1]/RES*gfx.height);
+        });
+        
       }
-      function drawNodes() {
-        processing.noStroke();
-        processing.fill(0);
+      function drawNodes(gfx) {
+        gfx.noStroke();
+        gfx.fill(0);
         nodes.forEach(function(node) {
-          processing.ellipse(node[0]/RES*processing.width,
-                             processing.height - node[1]/RES*processing.height,
-                             2, 2);
+          gfx.ellipse(node[0]/RES*gfx.width,
+                      gfx.height - node[1]/RES*gfx.height,
+                      2, 2);
         });
       }
       
       var highlightNode;
+      function drawMap(gfx) {
+        gfx.background(255)
+        drawEdges(gfx);
+        // drawNodes(gfx);
+      }
+      
+      function drawHighlight() {
+        if (highlightNode) {
+          processing.fill(255, 0, 0);
+          processing.noStroke();
+          processing.ellipse(highlightNode[0]/RES*processing.width,
+                             processing.height - highlightNode[1]/RES*processing.height,
+                             10, 10);
+          processing.noFill();
+          processing.stroke(255, 0, 0);
+          processing.strokeWeight(6);
+          processing.ellipse(highlightNode[0]/RES*processing.width,
+                             processing.height - highlightNode[1]/RES*processing.height,
+                             27, 27);
+        }        
+      }
+      
+      function generateMapImage() {
+        var gfx = processing.createGraphics(processing.width, processing.height, processing.P3D)
+        gfx.beginDraw();
+        drawMap(gfx);
+        gfx.endDraw();
+        return gfx;
+      }
+      
+      var mapImage;
+      
       processing.draw = function() {
+        if (! mapImage) {
+          mapImage = generateMapImage();
+        }
         if (dirty) {
-          processing.background(255);
-          drawEdges();
-          drawNodes();
-          if (highlightNode) {
-            processing.fill(255, 0, 0);
-            processing.noStroke();
-            processing.ellipse(highlightNode[0]/RES*processing.width,
-                               processing.height - highlightNode[1]/RES*processing.height,
-                               10, 10);
-            processing.noFill();
-            processing.stroke(255, 0, 0);
-            processing.strokeWeight(6);
-            processing.ellipse(highlightNode[0]/RES*processing.width,
-                               processing.height - highlightNode[1]/RES*processing.height,
-                               27, 27);
+          var start = Date.now();
+          if (dirty > 1) {
+            processing.tint(255, 32);
+          } else {
+            processing.tint(255);
           }
-          dirty = false;
+          processing.image(mapImage, 0, 0);
+          drawHighlight();
+          dirty--;
+          // console.log("Dirty draw took", Date.now() - start, "millis");
+        }
+        if (mostRecentFoundPaths.length == 1) {
+          var lastPath = dirty > 0 ? mostRecentFoundPaths[0] : mostRecentFoundPaths.shift();
+          // processing.tint(255);
+          // processing.image(mapImage, 0, 0);
+          drawPath(nodeListToPath(lastPath));
+          if (! lastPath.isComplete) {
+            dirty = 1;
+          }
+        }
+        if (mostRecentFoundPaths.length > 1) {
+          var start = Date.now();
+          for (var i = 0; i < mostRecentFoundPaths.length - 1 && (Date.now() - start < 1000/60); ++i) {
+            drawPath(nodeListToPath(mostRecentFoundPaths.shift()));
+          }
+          dirty = 30;
         }
       };
 
       function n2k(node) {
-        return node[0]+'x'+node[1];
+        return node[0]+','+node[1];
+      }
+      function k2n(key) {
+        return key.split(",").map(Number);
       }
       processing.setup = function() {
         processing.size(1000, 1000);
-        processing.background(0);
+        processing.smooth();
+        processing.background(255);
         processing.frameRate(30);
         $.getJSON('edges.json', function(e) {
           edges = e;
           nodes = {};
+          adjacencies = {};
+          edgeSpeeds = {};
           edges.forEach(function(edge) {
-            if (n2k(edge[0]) in nodes)
             nodes[n2k(edge[0])] = true;
             nodes[n2k(edge[1])] = true;
+            if (! adjacencies[n2k(edge[0])]) {
+              adjacencies[n2k(edge[0])] = [];
+            }
+            adjacencies[n2k(edge[0])].push(edge[1]);
+            if (! adjacencies[n2k(edge[1])]) {
+              adjacencies[n2k(edge[1])] = [];
+            }
+            adjacencies[n2k(edge[1])].push(edge[0]);
+            edgeSpeeds[n2k(edge[0])+"-"+n2k(edge[1])] = edge[2];
           });
-          nodes = Object.keys(nodes).map(function(k) { return k.split("x").map(Number); });
-          dirty = true;
+          nodes = Object.keys(nodes).map(k2n);
+          mapImage = generateMapImage();
+          dirty = 1;
         });
       };
-      processing.mousePressed = function() {
-        var localCoords = [processing.mouseX*2 * RES/processing.width, (processing.height - processing.mouseY*2) * RES/processing.height];
+      function nearestNodeToClick(mouseX, mouseY) {
+        var localCoords = [mouseX*2 * RES/processing.width, (processing.height - mouseY*2) * RES/processing.height];
         var nearestNode, nearestDistance = Number.MAX_VALUE;
         function distance(n1, n2) {
           return Math.sqrt((n1[0]-n2[0])*(n1[0]-n2[0]) + (n1[1]-n2[1])*(n1[1]-n2[1]));
@@ -168,30 +280,55 @@
             nearestDistance = d;
           }
         });
-        $('#textoutput').text("Clicked near node ("+nearestNode[0]+","+nearestNode[1]+")");
-        highlightNode = nearestNode;
-        dirty = true; 
+        return nearestNode;
+      }
+
+      function pathToString(path) {
+        return "["+path.map(function(nodeOrEdge) { 
+          if (typeof(nodeOrEdge[0]) == "number") {
+            return "("+nodeOrEdge[0]+","+nodeOrEdge[1]+")";
+          } else if (nodeOrEdge[0] instanceof Array) {
+            return "(("+nodeOrEdge[0][0]+","+nodeOrEdge[0][1]+"), ("+nodeOrEdge[1][0]+","+nodeOrEdge[1][1]+"))";
+          }
+          return false;
+        }).filter(function(x) { return x; }).join(", ") + "]";
+      }
+      function nodeListToPath(nodeList) {
+        return [nodeList[0]].concat(nodeList.map(function(node, i, array) {
+          return (i < array.length-1) ? [[node[0], node[1]], [array[i+1][0], array[i+1][1]]] : [];
+        })).concat([nodeList[nodeList.length-1]]);
       }
       
-      function parseInput(dataString) {
-        var dataJSONish = dataString.replace(/\(/g, "[").replace(/\)/g, "]");
-        var data;
-        try {
-          data = JSON.parse(dataJSONish);
-        } catch (e) {
-          alert("Sorry...I wasn't able to render that string!");
-          console.log(e);
-          return;
+      processing.mousePressed = function() {
+        var nearestNode = nearestNodeToClick(processing.mouseX, processing.mouseY);
+        if (! highlightNode) {
+          $('#textoutput').text("Clicked near node ("+nearestNode[0]+","+nearestNode[1]+")");
+          highlightNode = nearestNode;
+          mostRecentFoundPaths = []
+          dirty = 1; 
+        } else {
+          var dataStructure;
+          switch ($('input[name=searchType]:checked').val()) {
+            case 'heuristic':
+              dataStructure = MinHeapDS;
+              break;
+            case 'dfs':
+              dataStructure = StackDS;
+              break;
+            case 'bfs':
+            default:
+              dataStructure = QueueDS;
+          }
+          var nodeList = findPath(highlightNode, nearestNode, dataStructure);
+          $('#textoutput').text("Path from node ("+highlightNode[0]+", "+highlightNode[1]+") to node ("+nearestNode[0]+", "+nearestNode[1]+"): "+(nodeList ? "found ("+nodeList.length+" nodes)." : "not found."));
+
+          highlightNode = false;
         }
-        if (! data instanceof Array) {
-          alert("Sorry...I wasn't able to render that string!");
-          console.log("Input wasn't an array...");
-          return;
-        }
-        console.log("parsed input as", data);
-        dirty = true;
-        processing.draw();
-        data.forEach(function(entry) {
+      }
+      
+      function drawPath(path) {
+        var start = Date.now();
+        path.forEach(function(entry) {
           if (entry instanceof Array && entry.length == 2) {
             // it's a node or edge...
             if (typeof(entry[0]) == "number") {
@@ -214,12 +351,174 @@
                               processing.height - edge[1][1]/RES*processing.height);
             }
           }
-        })
+        });
+        // console.log("path took", Date.now() - start, "millis to draw");
+      }
+            
+      function NodeSet() {
+        var o = {};
+        
+        this.add = function(node) {
+          o[n2k(node)] = true;
+        }
+        this.contains = function(node) {
+          return n2k(node) in o;
+        }
+        this.remove = function(node) {
+          delete o[n2k(node)];
+        }
+        this.length = function() {
+          return Object.keys(o).length;
+        }
+        return this;
+      }
+      function StackDS() {
+        var o = [];
+        this.add = function(node) {
+          o.push(node);
+        }
+        this.remove = function() {
+          return o.pop();
+        }
+        this.length = function() {
+          return o.length;
+        }
+        return this;
+      }
+      function QueueDS() {
+        var o = [];
+        this.add = function(node) {
+          o.unshift(node);
+        }
+        this.remove = function() {
+          return o.pop();
+        }
+        this.length = function() {
+          return o.length;
+        }
+        return this;
+      }
+
+      function fixPythonError(err){
+        return String(err).replace(/line (\d+)/, function(a, b, c, d) { return "line "+(Number(b)); })+"\n";
+      }
+      var scrollTimeout;
+      var messageBuffer = [];
+      function displayMessage(msg) {
+        messageBuffer.push(msg);
+        if (! scrollTimeout) {
+          scrollTimeout = setTimeout(function() {
+            $('#pythonoutput').append(messageBuffer.join(''));
+            $('#pythonoutput').show()
+            $('#pythonoutput').scrollTop($('#pythonoutput')[0].scrollHeight);
+            messageBuffer = []
+            scrollTimeout = undefined;
+          }, 1);
+        }
       }
       
-      $('#draw').on('click', function() {
-        parseInput($('#inputarea').val());
-      })
+      function MinHeapDS(heuristic) {
+        var heap = new MinHeap(function(l, r) { return l.weight - r.weight; });
+        this.add = function(node, from, to, bestPath) {
+          try {
+            var weight = heuristic(node, from, to, bestPath);
+            // console.log("got weight: ", weight);
+            heap.insert({weight: weight, node: node});            
+          } catch (err) {
+            displayMessage("Error running heuristic:\n"+fixPythonError(err));
+            throw err;
+          }
+        }
+        this.remove = function() {
+          return heap.removeHead().node;
+        }
+        this.length = function() {
+          return heap.size;
+        }
+      }
+      
+      var mostRecentFoundPaths = [];
+      
+      function getHeuristic() {
+        try {
+          var pythonCode = heuristicCodeMirror.getValue();
+          return getHeuristicFromPython(pythonCode, displayMessage, { 
+            edgeSpeed: function(a, b) { 
+              return Math.max(edgeSpeeds[n2k(a)+"-"+n2k(b)] || 25, edgeSpeeds[n2k(b)+"-"+n2k(a)] || 25); 
+            },
+            adjacentNodes: function(node) {
+              return adjacencies[node];
+            }
+          });
+        } catch (err) {
+          displayMessage("Error creating heuristic:\n"+fixPythonError(err));
+          throw err;
+        }
+      }
+      
+      function findPath(from, to, nextNodeDS) {
+        var start = Date.now();
+        var visitedNodes = new NodeSet();
+        var nextUp = new (nextNodeDS || StackDS)(getHeuristic());
+        var bestPaths = {};
+        bestPaths[n2k(from)] = [from];
+        mostRecentFoundPaths = [];
+        
+        nextUp.add(from, from, to, []);
+        
+        while (nextUp.length() > 0) {
+          var node = nextUp.remove();
+          if (visitedNodes.contains(node)) {
+            continue;
+          }
+          
+          mostRecentFoundPaths.push(bestPaths[n2k(node)]);
+          visitedNodes.add(node);
+          if (node[0] == to[0] && node[1] == to[1]) {
+            console.log("found path in", Date.now() - start, "millis; tried", visitedNodes.length(), Object.keys(bestPaths).length);
+            var finalPath = bestPaths[n2k(node)].concat([node]);
+            finalPath.isComplete = true;
+            mostRecentFoundPaths.push(finalPath);
+            return finalPath;
+          }
+          
+          var adjacentNodes = adjacencies[n2k(node)] || [];
+          for (var i = 0; i < adjacentNodes.length; ++i) {
+            var nextNode = adjacentNodes[i]
+            if (! visitedNodes.contains(nextNode)) {
+              nextUp.add(nextNode, from, to, bestPaths[n2k(node)]);
+              if (! bestPaths[n2k(nextNode)]) {
+                bestPaths[n2k(nextNode)] = bestPaths[n2k(node)].concat([nextNode]);
+              }
+            }
+          }
+        }
+        console.log("no path found in", Date.now() - start, "millis");
+        return false;
+      }
+
+      var heuristicCodeMirror;
+      $(function() {
+        heuristicCodeMirror = CodeMirror.fromTextArea(document.getElementById("heuristic"), {
+          lineNumbers: true,
+          mode: "python",
+          indentUnit: 2
+        });
+        if (window.localStorage.getItem('code')) {
+          heuristicCodeMirror.setValue(window.localStorage.getItem('code'));
+          $('input[value=heuristic]').attr('checked', 'checked');
+        }
+        heuristicCodeMirror.on('changes', function(change) {
+          window.localStorage.setItem('code', heuristicCodeMirror.getValue());
+          $('input[value=heuristic]').attr('checked', 'checked');
+        });
+        heuristicCodeMirror.setOption("extraKeys", {
+          Tab: function(cm) {
+            var spaces = Array(cm.getOption("indentUnit") + 1).join(" ");
+            cm.replaceSelection(spaces);
+          }
+        });
+      });
     }
   
     var canvas = document.getElementById("canvas1");
